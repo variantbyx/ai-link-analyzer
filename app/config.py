@@ -16,6 +16,8 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 
 # In-memory Caching for Quota Preservation
 ENABLE_CACHE = os.getenv("ENABLE_CACHE", "true").lower() in ("true", "1", "yes")
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))  # 1 hour default
+CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "500"))         # Max 500 cached entries
 
 # Server Settings
 API_HOST = os.getenv("API_HOST", "0.0.0.0")

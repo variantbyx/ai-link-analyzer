@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 import httpx
 
-from app.utils.validators import validate_url
+from app.utils.validators import validate_url, create_ssrf_safe_transport
 
 
 MAX_HTML_SIZE = 2 * 1024 * 1024  # 2MB
@@ -36,7 +36,9 @@ async def fetch_html(url: str) -> tuple[str, str]:
     timeout = httpx.Timeout(20.0, connect=15.0)
 
     try:
+        transport = create_ssrf_safe_transport()
         async with httpx.AsyncClient(
+            transport=transport,
             timeout=timeout,
             follow_redirects=False
         ) as client:

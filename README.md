@@ -250,14 +250,22 @@ ai-link-analysis/
 
 ## 4. Security & Robustness Features
 
-1. **SSRF Defense (`app/utils/validators.py`)**:
+1. **SSRF & Anti-DNS-Rebinding Defense (`app/utils/validators.py`)**:
    - Rejects non-HTTP/HTTPS URLs and embedded credentials (`user:pass@host`).
    - Enforces standard web ports (80, 443).
    - Rejects `localhost`, `*.localhost`, and resolves hostnames asynchronously.
-   - Enforces `ipaddress.ip_address(ip).is_global` against all resolved IP addresses, blocking both IPv4 and IPv6 private, loopback, link-local (cloud metadata endpoints like `169.254.169.254`), multicast, and reserved addresses.
+   - Enforces `ipaddress.ip_address(ip).is_global` against all resolved IP addresses, blocking both IPv4 and IPv6 private, loopback, link-local (cloud metadata endpoints like `169.254.169.254`, `fe80::/10`), multicast, and reserved addresses.
+   - **Socket-Level IP Pinning (Anti-TOCTOU)**: Uses a custom `SSRFSafeNetworkBackend` in HTTPX that intercepts TCP connection establishment. It resolves DNS at the exact moment of socket creation, verifies global routability, and opens the TCP stream directly to the validated IP address while preserving the domain for TLS SNI and Host header validation. This completely eliminates Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding attacks.
    - **Manual Redirect Following**: Follows redirects manually (up to 5 hops) with strict re-validation of each redirect target URL and its resolved IP address, neutralizing redirect-based SSRF bypasses.
 
-2. **Scraper Safeguards & SPA Extraction (`app/services/website_extractor.py`)**:
+2. **Cache Integrity & Expiry (`app/services/cache_service.py`)**:
+   - **Collision-Free Key Normalization**: Lowercases scheme and domain, strips tracking parameters (`utm_*`, `fbclid`, `gclid`), but strictly preserves and sorts functional query parameters (`?id=1` vs `?id=2`), ensuring different URLs never share results.
+   - **Time-to-Live (TTL) Expiry**: Each cached entry tracks its insertion timestamp, automatically expiring and evicting entries past `CACHE_TTL_SECONDS` (default: 3600s / 1 hour).
+   - **Failure Isolation**: Analyses with errors or `success: False` are refused by the cache, ensuring only verified, complete analyses are stored.
+   - **Immutability & URL Fidelity**: Returns deep copies of cached models with the requested URL preserved, preventing callers from mutating internal cache state.
+   - **LRU Memory Protection**: Enforces an `OrderedDict` capacity cap (`CACHE_MAX_SIZE`, default: 500) that evicts the least recently used entries to prevent unbounded memory growth.
+
+3. **Scraper Safeguards & SPA Extraction (`app/services/website_extractor.py`)**:
    - **Streaming Size Cap**: Streams byte chunks and aborts immediately if response body exceeds 2 MB (`MAX_HTML_SIZE`).
    - **Lightweight Architecture**: Utilizes `httpx` and `BeautifulSoup4` for low-latency scraping without the heavy memory footprint and container bloat of headless browser engines (Playwright/Puppeteer).
    - **SPA Shell Resilience**: For modern client-side Single-Page Applications (e.g. Next.js/React) where `<main>` tags often mount empty prior to hydration, the extractor checks content length (requiring $\ge 150$ characters) before selecting `<main>`, safely falling back to `soup.body` to capture rendered text, call-to-action buttons, and heading hierarchies.
@@ -332,7 +340,7 @@ The project includes unit, security, and integration tests built with Python's s
 python -m unittest -v tests.test_link_analysis
 ```
 
-### Verified Test Coverage
+### Verified Test Coverage (16 Tests)
 - `test_health_endpoint`: Validates `/health` check.
 - `test_home_endpoint`: Validates `/` metadata and discovery.
 - `test_link_analysis_invalid_url_format`: Verifies rejection of malformed URLs (HTTP 422).
@@ -340,7 +348,14 @@ python -m unittest -v tests.test_link_analysis
 - `test_validate_url_rejects_localhost`: Unit test for internal loopback rejection.
 - `test_validate_url_rejects_ftp`: Unit test enforcing HTTP/HTTPS schemes.
 - `test_validate_url_rejects_non_standard_port`: Unit test restricting ports to 80 and 443.
+- `test_dns_rebinding_backend_blocks_private_ip`: Direct socket-layer test verifying `SSRFSafeNetworkBackend` rejects loopback, RFC1918 private IPs, and non-standard ports.
+- `test_cache_service_normalization_and_storage`: Validates URL key normalization and cache round-trip.
+- `test_cache_different_urls_do_not_share_results`: Ensures distinct functional query strings (`?id=1` vs `?id=2`) never collide or share cache entries.
+- `test_cache_expiry_ttl`: Validates TTL expiration and automatic eviction.
+- `test_failed_analysis_not_cached`: Guarantees unverified or failed analyses are never stored in cache.
+- `test_cached_response_retains_requested_url`: Verifies that cached responses return deep copies with caller's requested URL preserved.
 - `test_extract_content_html_parsing`: Verifies parsing of HTML, meta tags, and Schema.org JSON-LD.
+- `test_offline_analyzer_generation`: Verifies deterministic 5-section offline generation.
 - `test_link_analysis_mocked_success`: Complete end-to-end endpoint test with mocked services.
 
 ---

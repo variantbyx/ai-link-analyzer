@@ -1,4 +1,5 @@
 import asyncio
+import time
 import unittest
 from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
@@ -139,6 +140,88 @@ class TestLinkAnalysisAPI(unittest.TestCase):
         cached_hit = get_cached_analysis("https://cached-example.com")
         self.assertIsNotNone(cached_hit)
         self.assertEqual(cached_hit.brand.name, res.brand.name)
+
+    def test_cache_different_urls_do_not_share_results(self):
+        u1 = "https://example.com/item?id=1"
+        u2 = "https://example.com/item?id=2"
+        self.assertNotEqual(normalize_cache_url(u1), normalize_cache_url(u2))
+
+        dummy1 = {
+            "url": u1,
+            "title": "Item 1",
+            "description": "Product 1",
+            "headings": ["Product 1"],
+            "button_actions": [],
+            "json_ld": []
+        }
+        res1 = generate_offline_analysis(dummy1)
+        set_cached_analysis(u1, res1)
+
+        # u2 should NOT hit the cache for u1
+        cached2 = get_cached_analysis(u2)
+        self.assertIsNone(cached2)
+
+    def test_cache_expiry_ttl(self):
+        url = "https://expiring-site.com"
+        dummy = {
+            "url": url,
+            "title": "Expiring Page",
+            "description": "Will expire",
+            "headings": ["Expiring"],
+            "button_actions": [],
+            "json_ld": []
+        }
+        res = generate_offline_analysis(dummy)
+        set_cached_analysis(url, res)
+
+        # Immediate lookup succeeds
+        self.assertIsNotNone(get_cached_analysis(url))
+
+        # Forward time past TTL (default 3600s)
+        with patch("time.time", return_value=time.time() + 3700):
+            expired = get_cached_analysis(url)
+            self.assertIsNone(expired)
+
+    def test_failed_analysis_not_cached(self):
+        set_cached_analysis("https://broken.com", None)
+        self.assertIsNone(get_cached_analysis("https://broken.com"))
+
+    def test_cached_response_retains_requested_url(self):
+        canonical_url = "https://example.com"
+        request_url = "https://example.com/"
+        dummy = {
+            "url": canonical_url,
+            "title": "Example Domain",
+            "description": "Example page",
+            "headings": ["Example Domain"],
+            "button_actions": [],
+            "json_ld": []
+        }
+        res = generate_offline_analysis(dummy)
+        set_cached_analysis(canonical_url, res)
+
+        retrieved = get_cached_analysis(canonical_url, requested_url=request_url)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(str(retrieved.website), request_url)
+
+    def test_dns_rebinding_backend_blocks_private_ip(self):
+        from app.utils.validators import SSRFSafeNetworkBackend
+        backend = SSRFSafeNetworkBackend()
+
+        async def run_blocks():
+            # Block connection to localhost / 127.0.0.1
+            with self.assertRaises(ValueError):
+                await backend.connect_tcp("127.0.0.1", 80)
+            # Block connection to private RFC1918
+            with self.assertRaises(ValueError):
+                await backend.connect_tcp("10.0.0.1", 80)
+            # Block non-standard port
+            with self.assertRaises(ValueError):
+                await backend.connect_tcp("example.com", 22)
+            with self.assertRaises(ValueError):
+                await backend.connect_tcp("example.com", 8080)
+
+        asyncio.run(run_blocks())
 
     @patch("app.services.analysis_service.extract_website", new_callable=AsyncMock)
     @patch("app.services.analysis_service.generate_analysis_unified", new_callable=AsyncMock)
