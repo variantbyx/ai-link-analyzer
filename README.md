@@ -100,7 +100,7 @@ ai-link-analysis/
 ### Setup
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/<YOUR-GITHUB-USERNAME>/ai-link-analysis.git
+   git clone https://github.com/variantbyx/ai-link-analyzer
    cd ai-link-analysis
    ```
 
