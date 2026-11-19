@@ -4,7 +4,7 @@ from app.schemas import LinkAnalysisResponse
 from app.services.cache_service import get_cached_analysis, set_cached_analysis
 from app.services.offline_analyzer import generate_offline_analysis
 from app.services.ollama_service import analyze_with_ollama, check_ollama_alive, OllamaServiceError
-from app.services.llm_service import analyze_website, LLMServiceError
+from app.services.llm_service import analyze_website, LLMServiceError, LLMQuotaExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ async def generate_analysis_unified(
             if ENABLE_CACHE:
                 set_cached_analysis(url, result)
             return result, "gemini"
+        except LLMQuotaExhaustedError as exc:
+            logger.warning(f"Auto Mode: Gemini daily quota exhausted. Cascading immediately to fallback: {exc}")
         except LLMServiceError as exc:
             err_msg = str(exc)
             logger.warning(f"Auto Mode: Gemini failed ({err_msg}). Falling back...")

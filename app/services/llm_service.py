@@ -30,6 +30,10 @@ class LLMServiceError(Exception):
     """Raised when AI analysis fails."""
 
 
+class LLMQuotaExhaustedError(LLMServiceError):
+    """Raised when an AI provider's daily quota or account limit is completely exhausted."""
+
+
 SYSTEM_PROMPT = """
 You are a senior business intelligence analyst, competitive intelligence researcher,
 and SEO strategist. Your objective is to thoroughly analyze website data and produce
@@ -170,8 +174,21 @@ async def analyze_website(website_data: dict, competitor_signals: dict | None = 
             return result
 
         except (ServerError, APIError) as exc:
-            # Check for transient server errors (503 / 429) to retry
             err_str = str(exc)
+            
+            # Immediately distinguish permanent daily quota exhaustion from transient rate spikes
+            is_daily_exhaustion = any(phrase in err_str.lower() for phrase in [
+                "per day limit exceeded",
+                "daily limit exceeded",
+                "quota exceeded for metric",
+                "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                "plan and billing details"
+            ])
+            if is_daily_exhaustion:
+                # Do NOT retry daily quota exhaustion; abort immediately to trigger fallback
+                raise LLMQuotaExhaustedError(f"Gemini daily quota exhausted: {err_str}") from exc
+
+            # Transient server errors (503 UNAVAILABLE or short burst 429 RPM) can be retried
             if ("503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str) and attempt < max_retries - 1:
                 wait_time = 2 * (attempt + 1)
                 await asyncio.sleep(wait_time)
