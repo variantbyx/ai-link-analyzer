@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: ai_link_analysis_api
+    ports:
+      - "4000:4000"
+    environment:
+      - API_PORT=4000
+      - LLM_PROVIDER=auto
+      - GEMINI_MODEL=gemini-2.5-flash
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ENABLE_CACHE=true
+    env_file:
+      - .env
+    restart: unless-stopped

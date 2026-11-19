@@ -55,6 +55,9 @@ ai-link-analysis/
 ├── tests/
 │   ├── __init__.py
 │   └── test_link_analysis.py       # 11 Unit and integration tests (API, SSRF, Cache, Offline)
+├── Dockerfile                      # Production container image definition
+├── docker-compose.yml              # One-command orchestration configuration
+├── .dockerignore                   # Docker build context exclusions
 ├── sample_analysis.json            # Real live analysis output
 ├── test_extractor.py               # Standalone test for web scraping pipeline
 ├── test_llm.py                     # Standalone test for end-to-end LLM generation
@@ -111,7 +114,7 @@ ai-link-analysis/
      GEMINI_MODEL=gemini-2.5-flash
      ENABLE_CACHE=true
      ```
-     *Tries Gemini free tier first. If quota limit (429) or outage occurs, automatically falls back to Ollama or the Deterministic Offline Engine.*
+     *Tries Gemini free tier first. If rate limits (429) or outages occur, attempts local Ollama if running, and seamlessly falls back to the Deterministic Offline Engine for uninterrupted service.*
    
    - **Mode B: 100% Offline / Zero API Keys Required**
      ```env
@@ -127,6 +130,7 @@ ai-link-analysis/
      OLLAMA_MODEL=qwen2.5:3b
      ENABLE_CACHE=true
      ```
+     *Requires Ollama installed and running locally with the target model (e.g. `ollama pull qwen2.5:3b`).*
 
 5. **Run the FastAPI server**:
    ```bash
@@ -247,14 +251,16 @@ ai-link-analysis/
 ## 4. Security & Robustness Features
 
 1. **SSRF Defense (`app/utils/validators.py`)**:
-   - Rejects non-HTTP/HTTPS URLs.
+   - Rejects non-HTTP/HTTPS URLs and embedded credentials (`user:pass@host`).
    - Enforces standard web ports (80, 443).
-   - Rejects `localhost`, `*.localhost`, and embedded credentials (`user:pass@host`).
-   - Resolves target hostnames asynchronously and validates with `ipaddress.ip_address(ip).is_global`, rejecting loopback (`127.0.0.1`), private RFC 1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and link-local addresses.
-   - Validates each hop during manual redirect handling.
+   - Rejects `localhost`, `*.localhost`, and resolves hostnames asynchronously.
+   - Enforces `ipaddress.ip_address(ip).is_global` against all resolved IP addresses, blocking both IPv4 and IPv6 private, loopback, link-local (cloud metadata endpoints like `169.254.169.254`), multicast, and reserved addresses.
+   - **Manual Redirect Following**: Follows redirects manually (up to 5 hops) with strict re-validation of each redirect target URL and its resolved IP address, neutralizing redirect-based SSRF bypasses.
 
-2. **Scraper Safeguards (`app/services/website_extractor.py`)**:
+2. **Scraper Safeguards & SPA Extraction (`app/services/website_extractor.py`)**:
    - **Streaming Size Cap**: Streams byte chunks and aborts immediately if response body exceeds 2 MB (`MAX_HTML_SIZE`).
+   - **Lightweight Architecture**: Utilizes `httpx` and `BeautifulSoup4` for low-latency scraping without the heavy memory footprint and container bloat of headless browser engines (Playwright/Puppeteer).
+   - **SPA Shell Resilience**: For modern client-side Single-Page Applications (e.g. Next.js/React) where `<main>` tags often mount empty prior to hydration, the extractor checks content length (requiring $\ge 150$ characters) before selecting `<main>`, safely falling back to `soup.body` to capture rendered text, call-to-action buttons, and heading hierarchies.
    - **De-noising & De-duplication**: Filters tracking anchors (`#...`), non-navigational protocols (`mailto:`, `tel:`, `javascript:`), and de-duplicates identical links.
    - **Pre-cleanup Link Preservation**: Navigation and category links are harvested *before* removing `<nav>` and `<footer>` containers for clean body text extraction.
    - **Schema.org JSON-LD Extraction**: Automatically parses `<script type="application/ld+json">` to extract corporate identities, organizations, and structured business profiles.
@@ -273,14 +279,19 @@ ai-link-analysis/
 | Criteria | **Google Gemini 2.5 Flash** (Selected) | **OpenAI GPT-4o-mini** | **Anthropic Claude 3.5 Sonnet** |
 |---|---|---|---|
 | **Developer / Provider** | Google DeepMind | OpenAI | Anthropic |
-| **Input Pricing (per 1M tokens)** | **$0.075** (≤128K) / $0.15 (>128K) | $0.15 | $3.00 |
-| **Output Pricing (per 1M tokens)** | **$0.30** (≤128K) / $0.60 (>128K) | $0.60 | $15.00 |
-| **Measured Response Speed** | **4.5s – 7.5s** (benchmarked) | 4.0s – 6.5s | 8.0s – 14.0s |
+| **Input Pricing (per 1M tokens)**¹ | **$0.075** (≤128K) / $0.15 (>128K) | $0.15 | $3.00 |
+| **Output Pricing (per 1M tokens)**¹ | **$0.30** (≤128K) / $0.60 (>128K) | $0.60 | $15.00 |
+| **Response Latency** | **4.5s – 7.5s** (benchmarked locally)² | ~4.0s – 6.5s (published avg)³ | ~8.0s – 14.0s (published avg)³ |
 | **Context Window** | **1,000,000 tokens** | 128,000 tokens | 200,000 tokens |
 | **Native Structured JSON** | Supported via `response_schema` | Supported via `response_format` | Supported via Tool Use / JSON mode |
 | **Scraped Text Comprehension** | Excellent (handles raw HTML/JSON-LD) | Very Good | Outstanding |
-| **Cost for 1,000 Analyses** | **~$0.60 – $0.90** | ~$1.20 – $1.80 | ~$25.00 – $35.00 |
+| **Cost for 1,000 Analyses**¹ | **~$0.60 – $0.90** | ~$1.20 – $1.80 | ~$25.00 – $35.00 |
 | **Overall Verdict** | **Best balance of cost, speed, and context** | Strong alternative | Too expensive for link scraping |
+
+*Data & Methodology Disclosures:*
+1. **Pricing**: Based on official published standard tier rate cards (Google Cloud / AI Studio, OpenAI, Anthropic API docs).
+2. **Gemini Latency (Measured)**: Directly benchmarked end-to-end within this repository's test suite (`test_llm.py` across live web domains) measuring network round-trip + 5-section schema generation.
+3. **Comparative Latencies**: Estimated from public vendor status benchmarks and community evaluations for similar 1,500-token JSON schema outputs.
 
 ### B. Best Model Selection & Justification
 
@@ -336,17 +347,14 @@ python -m unittest -v tests.test_link_analysis
 
 ## 7. Deployment Instructions
 
-### Docker Deployment
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-EXPOSE 4000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4000"]
+### Docker & Docker Compose Deployment
+
+#### Option 1: Docker Compose (Recommended)
+```bash
+docker compose up --build
 ```
-Build and run:
+
+#### Option 2: Standalone Docker CLI
 ```bash
 docker build -t ai-link-analysis .
 docker run -p 4000:4000 --env-file .env ai-link-analysis
