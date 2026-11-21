@@ -21,4 +21,4 @@ CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "500"))         # Max 500 cache
 
 # Server Settings
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", "4000"))
+API_PORT = int(os.getenv("PORT", os.getenv("API_PORT", "4000")))
